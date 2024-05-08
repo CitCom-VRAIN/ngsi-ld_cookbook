@@ -1,0 +1,3 @@
+../../envs/jupyter-notebook/jupyter.env
+../../envs/orion-ld/orionld.env
+../../envs/quantumleap/quantum.env

@@ -1,0 +1,129 @@
+version: "3.5"
+services:
+
+  develop-env:
+    image: jupyter/base-notebook:ubuntu-22.04
+    hostname: dev-env
+    container_name: orionld-jupyter
+    depends_on:
+      - orionld
+    ports:
+      - "8888:8888"
+    environment:
+      - NB_USER=${NB_USER}
+      - CHOWN_HOME=yes
+      - JUPYTER_ENABLE_LAB=yes
+    working_dir: "/home/${NB_USER}"
+    user: root
+    volumes:
+      - ${HOST_PATH}:/home/${NB_USER}/notebooks
+      - ${HOST_DATA_PATH}:/home/${NB_USER}/data
+    networks:
+      fiware_network:
+        aliases:
+          - fiware.jupyter.dev
+
+  ##############################################################################
+  # Orion-LD                                                                   #
+  ##############################################################################
+  mongo-db:
+    image: mongo:${MONGO_VERSION}
+    hostname: mongo-db
+    container_name: db-mongo
+    expose:
+      - "${MDB_PORT}"
+    command: --nojournal
+    ports:
+      - "${MDB_PORT_HOST}:${MDB_PORT}"
+    networks:
+      fiware_network:
+        aliases:
+          - fiware.mongodb
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: |
+        host=`hostname --ip-address || echo 'fiware.mongodb'`; 
+        mongo --quiet $$host/test --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' && echo 0 || echo 1
+      interval: 5s
+
+  orionld:
+    image: fiware/orion-ld:${ORIONLD_VERSION}
+    hostname: orionld
+    container_name: fiware-orionld
+    depends_on:
+      - mongo-db
+    expose:
+      - ${ORIONLD_PORT}
+    ports:
+      - "${ORIONLD_PORT}:${ORIONLD_PORT}"
+    environment:
+      - ORIONLD_PORT=${ORIONLD_PORT} #Port to expose Orion-LD.
+      - ORIONLD_MONGO_HOST=fiware.mongodb #Mongo-DB database host.
+      - ORIONLD_LOG_LEVEL=DEBUG
+      - ORIONLD_MONGO_DB=${ORIONLD_DB_NAME} #Name of the database to be used inside mongo-db.
+    networks:
+      fiware_network:
+        aliases:
+          - fiware.orionld
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: curl --fail -s http://fiware.orionld:1026/version || exit 1
+      interval: 5s
+
+  ##############################################################################
+  # QuantumLeap                                                                #
+  ##############################################################################
+  crate-db:
+    image: crate:${CRATEDB_VERSION}
+    hostname: crate-db
+    container_name: db-crate
+    depends_on:
+      - orionld
+    expose:
+      - "4300" # Transport protocol
+      - "5432" # Postgres protocol
+    ports:
+      - "${ADMIN_PORT_HOST}:4200" # Admin UI
+    command: [ "crate", "-Cnetwork.host=_site_" ]
+    # volumes:
+    #   - /tmp/crate/01:/data
+    environment:
+      - CRATE_HEAP_SIZE=2g
+    networks:
+      fiware_network:
+        aliases:
+          - fiware.cratedb
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  quantumleap:
+    image: fiware/quantum-leap:${QUANTUMLEAP_VERSION}
+    hostname: quantumleap
+    container_name: quantum-leap
+    depends_on:
+      - crate-db
+    ports:
+      - "8668:8668"
+    environment:
+      - CRATE_HOST=fiware.cratedb
+      - CRATE_PORT=4200
+    networks:
+      fiware_network:
+        aliases:
+          - fiware.quantumleap
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  fiware_network:
+    driver: bridge
